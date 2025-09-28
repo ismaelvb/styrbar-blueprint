@@ -1,16 +1,18 @@
 blueprint:
-  name: IKEA Styrbar Zigbee2MQTT - Alternância com input_select + Flash
+  name: IKEA Styrbar Zigbee2MQTT
   description: >
     Controla brilho, tonalidade e alternância de luzes com o IKEA Styrbar via Zigbee2MQTT.
-    Alternância persistente usando input_select com nomes das luzes. Feedback visual com flash.
+    Usa o dispositivo Zigbee selecionado para detetar automaticamente a entidade *_action.
+    Persistência com input_select e feedback visual com flash da luz ativa.
   domain: automation
+
   input:
-    styrbar_action_sensor:
-      name: Sensor de Ação do Styrbar
-      description: O sensor `*_action` do comando Styrbar no Zigbee2MQTT
+    styrbar_device:
+      name: Dispositivo IKEA Styrbar (Zigbee2MQTT)
+      description: Seleciona o dispositivo MQTT do comando IKEA Styrbar
       selector:
-        entity:
-          domain: sensor
+        device:
+          integration: mqtt
 
     light_entities:
       name: Luzes a Controlar
@@ -22,7 +24,7 @@ blueprint:
 
     active_light_select:
       name: Input Select com luz ativa
-      description: input_select com os nomes das luzes como opções (mesmos que em cima!)
+      description: input_select com os nomes das luzes como opções (sem prefixo "light.")
       selector:
         entity:
           domain: input_select
@@ -57,14 +59,23 @@ variables:
 
 trigger:
   - platform: state
-    entity_id: !input styrbar_action_sensor
-
-action:
-  - variables:
+    entity_id: []
+    for:
+      seconds: 0
+    to: ~
+    from: ~
+    variables:
+      triggering_entity: "{{ trigger.entity_id }}"
+    condition:
+      - condition: template
+        value_template: >
+          {{ device_id(triggering_entity) == device_id('!input styrbar_device') }}
+    variables:
       action: "{{ trigger.to_state.state }}"
       light_index: "{{ entity_names.index(current_light_id | replace('light.', '')) }}"
       total_lights: "{{ entity_names | length }}"
 
+action:
   - choose:
 
       # 👉 Alternar luz para a direita
