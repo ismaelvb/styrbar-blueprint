@@ -1,0 +1,143 @@
+blueprint:
+  name: IKEA Styrbar Zigbee2MQTT - Alternância com input_select + Flash
+  description: >
+    Controla brilho, tonalidade e alternância de luzes com o IKEA Styrbar via Zigbee2MQTT.
+    Alternância persistente usando input_select com nomes das luzes. Feedback visual com flash.
+  domain: automation
+  input:
+    styrbar_action_sensor:
+      name: Sensor de Ação do Styrbar
+      description: O sensor `*_action` do comando Styrbar no Zigbee2MQTT
+      selector:
+        entity:
+          domain: sensor
+
+    light_entities:
+      name: Luzes a Controlar
+      description: Lista de luzes que serão controladas (ordem define alternância)
+      selector:
+        entity:
+          domain: light
+          multiple: true
+
+    active_light_select:
+      name: Input Select com luz ativa
+      description: input_select com os nomes das luzes como opções (mesmos que em cima!)
+      selector:
+        entity:
+          domain: input_select
+
+    brightness_step:
+      name: Passo de Brilho (%)
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 50
+
+    color_temp_step:
+      name: Passo de Temperatura (mireds)
+      default: 25
+      selector:
+        number:
+          min: 5
+          max: 100
+
+mode: restart
+
+variables:
+  light_list: !input light_entities
+  brightness_step: !input brightness_step
+  color_temp_step: !input color_temp_step
+  active_select: !input active_light_select
+  current_light_id: "{{ states(active_select) }}"
+  active_light: "{{ current_light_id }}"
+  entity_list: "{{ light_list }}"
+  entity_names: "{{ light_list | map('replace', 'light.', '') | list }}"
+
+trigger:
+  - platform: state
+    entity_id: !input styrbar_action_sensor
+
+action:
+  - variables:
+      action: "{{ trigger.to_state.state }}"
+      light_index: "{{ entity_names.index(current_light_id | replace('light.', '')) }}"
+      total_lights: "{{ entity_names | length }}"
+
+  - choose:
+
+      # 👉 Alternar luz para a direita
+      - conditions:
+          - condition: template
+            value_template: "{{ action == 'arrow_right_click' }}"
+        sequence:
+          - variables:
+              new_index: "{{ (light_index + 1) % total_lights }}"
+              new_light_name: "{{ entity_names[new_index] }}"
+              new_light: "light.{{ new_light_name }}"
+          - service: input_select.select_option
+            data:
+              entity_id: "{{ active_select }}"
+              option: "{{ new_light_name }}"
+          - service: light.turn_on
+            data:
+              entity_id: "{{ new_light }}"
+              flash: short
+
+      # 👈 Alternar luz para a esquerda
+      - conditions:
+          - condition: template
+            value_template: "{{ action == 'arrow_left_click' }}"
+        sequence:
+          - variables:
+              new_index: "{{ (light_index - 1) % total_lights }}"
+              new_light_name: "{{ entity_names[new_index] }}"
+              new_light: "light.{{ new_light_name }}"
+          - service: input_select.select_option
+            data:
+              entity_id: "{{ active_select }}"
+              option: "{{ new_light_name }}"
+          - service: light.turn_on
+            data:
+              entity_id: "{{ new_light }}"
+              flash: short
+
+      # 💡 Clique curto brilho → liga/desliga
+      - conditions:
+          - condition: template
+            value_template: "{{ action in ['brightness_up_click', 'brightness_down_click'] }}"
+        sequence:
+          - service: light.toggle
+            data:
+              entity_id: "{{ active_light }}"
+
+      # 🔆 Pressão longa → alterar brilho
+      - conditions:
+          - condition: template
+            value_template: "{{ action in ['brightness_up_hold', 'brightness_down_hold'] }}"
+        sequence:
+          - service: light.turn_on
+            data:
+              entity_id: "{{ active_light }}"
+              brightness_step_pct: >-
+                {% if action == 'brightness_up_hold' %}
+                  {{ brightness_step }}
+                {% else %}
+                  {{ -1 * brightness_step }}
+                {% endif %}
+
+      # 🌡️ Pressão longa lado → alterar tonalidade
+      - conditions:
+          - condition: template
+            value_template: "{{ action in ['arrow_right_hold', 'arrow_left_hold'] }}"
+        sequence:
+          - service: light.turn_on
+            data:
+              entity_id: "{{ active_light }}"
+              color_temp_step: >-
+                {% if action == 'arrow_right_hold' %}
+                  {{ color_temp_step }}
+                {% else %}
+                  {{ -1 * color_temp_step }}
+                {% endif %}
