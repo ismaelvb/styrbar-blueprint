@@ -1,36 +1,40 @@
 blueprint:
-  name: IKEA Styrbar Zigbee2MQTT
+  name: IKEA Styrbar Zigbee2MQTT - Dispositivo automático
   description: >
-    Controla brilho, tonalidade e alternância de luzes com o comando IKEA Styrbar via Zigbee2MQTT.
-    Selecionas o dispositivo e o blueprint vai reagir à entidade *_action correspondente.
-    Alternância persistente via input_select, feedback visual com flash.
+    Controla luzes com o comando IKEA Styrbar via Zigbee2MQTT.
+    Seleciona o dispositivo (não a entidade), e o blueprint reage automaticamente à entidade *_action.
+    Alterna entre luzes, ajusta brilho e tonalidade, com persistência via input_select.
   domain: automation
   input:
     styrbar_device:
-      name: Dispositivo Styrbar MQTT
+      name: Dispositivo IKEA Styrbar (MQTT)
       selector:
         device:
           integration: mqtt
+
     light_entities:
-      name: Luzes a Controlar
+      name: Luzes a controlar
       selector:
         entity:
           domain: light
           multiple: true
+
     active_light_select:
-      name: Luz ativa (input_select)
+      name: Input Select com a luz ativa
       selector:
         entity:
           domain: input_select
+
     brightness_step:
-      name: Passo de Brilho (%)
+      name: Passo de brilho (%)
       default: 10
       selector:
         number:
           min: 1
           max: 50
+
     color_temp_step:
-      name: Passo de Temperatura (mireds)
+      name: Passo de temperatura (mireds)
       default: 25
       selector:
         number:
@@ -44,106 +48,92 @@ variables:
   brightness_step: !input brightness_step
   color_temp_step: !input color_temp_step
   select_entity: !input active_light_select
-  # nomes simples da luz (sem "light.")
-  light_names: "{{ lights | map('split', 'light.') | map('last') | list }}"
+  light_names: "{{ lights | map('replace', 'light.', '') | list }}"
+  styrbar_device_id: !input styrbar_device
 
 trigger:
   - platform: state
-    # escutar *todas* entidades de sensor, porque não sabemos o nome exato do *_action
-    entity_id: 
-      - sensor.* 
-    # ou poderias especificar um prefixo se souberes: sensor.styrbar_*
-  
+    entity_id:
+      - sensor.styrbar_action  # substitui pelo nome correto se for diferente
+
+condition:
+  - condition: template
+    value_template: >
+      {{ device_id(trigger.entity_id) == styrbar_device_id }}
+
 action:
   - variables:
-      dev_id: "{{ trigger.entity_id | device_id }}"
-      sel_dev: "{{ input.selectors.styrbar_device.device_id }}"
+      action: "{{ trigger.to_state.state }}"
+      current_option: "{{ states(select_entity) }}"
+      idx: "{{ light_names.index(current_option) }}"
+      total: "{{ light_names | length }}"
+      active_light: "{{ 'light.' ~ current_option }}"
+
   - choose:
       - conditions:
           - condition: template
-            value_template: "{{ dev_id == sel_dev }}"
+            value_template: "{{ action == 'arrow_right_click' }}"
         sequence:
-          # dentro daqui sabemos que a entidade acionada pertence ao dispositivo Styrbar
           - variables:
-              action: "{{ trigger.to_state.state }}"
-              current_option: "{{ states(select_entity) }}"
-              idx: "{{ light_names.index(current_option) }}"
-              total: "{{ light_names | length }}"
-          - choose:
-              # Alternar à direita
-              - conditions:
-                  - condition: template
-                    value_template: "{{ action == 'arrow_right_click' }}"
-                sequence:
-                  - variables:
-                      new_idx: "{{ (idx + 1) % total }}"
-                      new_name: "{{ light_names[new_idx] }}"
-                      new_entity: "light.{{ new_name }}"
-                  - service: input_select.select_option
-                    data:
-                      entity_id: "{{ select_entity }}"
-                      option: "{{ new_name }}"
-                  - service: light.turn_on
-                    data:
-                      entity_id: "{{ new_entity }}"
-                      flash: short
+              new_idx: "{{ (idx + 1) % total }}"
+              new_light: "{{ light_names[new_idx] }}"
+          - service: input_select.select_option
+            data:
+              entity_id: "{{ select_entity }}"
+              option: "{{ new_light }}"
+          - service: light.turn_on
+            data:
+              entity_id: "{{ 'light.' ~ new_light }}"
+              flash: short
 
-              # Alternar à esquerda
-              - conditions:
-                  - condition: template
-                    value_template: "{{ action == 'arrow_left_click' }}"
-                sequence:
-                  - variables:
-                      new_idx: "{{ (idx - 1) % total }}"
-                      new_name: "{{ light_names[new_idx] }}"
-                      new_entity: "light.{{ new_name }}"
-                  - service: input_select.select_option
-                    data:
-                      entity_id: "{{ select_entity }}"
-                      option: "{{ new_name }}"
-                  - service: light.turn_on
-                    data:
-                      entity_id: "{{ new_entity }}"
-                      flash: short
+      - conditions:
+          - condition: template
+            value_template: "{{ action == 'arrow_left_click' }}"
+        sequence:
+          - variables:
+              new_idx: "{{ (idx - 1) % total }}"
+              new_light: "{{ light_names[new_idx] }}"
+          - service: input_select.select_option
+            data:
+              entity_id: "{{ select_entity }}"
+              option: "{{ new_light }}"
+          - service: light.turn_on
+            data:
+              entity_id: "{{ 'light.' ~ new_light }}"
+              flash: short
 
-              # Clique curto brilho → toggle
-              - conditions:
-                  - condition: template
-                    value_template: "{{ action in ['brightness_up_click', 'brightness_down_click'] }}"
-                sequence:
-                  - service: light.toggle
-                    data:
-                      entity_id: "{{ 'light.' ~ current_option }}"
+      - conditions:
+          - condition: template
+            value_template: "{{ action in ['brightness_up_click', 'brightness_down_click'] }}"
+        sequence:
+          - service: light.toggle
+            data:
+              entity_id: "{{ active_light }}"
 
-              # Pressão longa brilho → brightness_step
-              - conditions:
-                  - condition: template
-                    value_template: "{{ action in ['brightness_up_hold', 'brightness_down_hold'] }}"
-                sequence:
-                  - service: light.turn_on
-                    data:
-                      entity_id: "{{ 'light.' ~ current_option }}"
-                      brightness_step_pct: >-
-                        {% if action == 'brightness_up_hold' %}
-                          {{ brightness_step }}
-                        {% else %}
-                          {{ -1 * brightness_step }}
-                        {% endif %}
+      - conditions:
+          - condition: template
+            value_template: "{{ action in ['brightness_up_hold', 'brightness_down_hold'] }}"
+        sequence:
+          - service: light.turn_on
+            data:
+              entity_id: "{{ active_light }}"
+              brightness_step_pct: >-
+                {% if action == 'brightness_up_hold' %}
+                  {{ brightness_step }}
+                {% else %}
+                  {{ -1 * brightness_step }}
+                {% endif %}
 
-              # Pressão longa setas → temperatura
-              - conditions:
-                  - condition: template
-                    value_template: "{{ action in ['arrow_right_hold', 'arrow_left_hold'] }}"
-                sequence:
-                  - service: light.turn_on
-                    data:
-                      entity_id: "{{ 'light.' ~ current_option }}"
-                      color_temp_step: >-
-                        {% if action == 'arrow_right_hold' %}
-                          {{ color_temp_step }}
-                        {% else %}
-                          {{ -1 * color_temp_step }}
-                        {% endif %}
-
-  # fim do choose
-
+      - conditions:
+          - condition: template
+            value_template: "{{ action in ['arrow_right_hold', 'arrow_left_hold'] }}"
+        sequence:
+          - service: light.turn_on
+            data:
+              entity_id: "{{ active_light }}"
+              color_temp_step: >-
+                {% if action == 'arrow_right_hold' %}
+                  {{ color_temp_step }}
+                {% else %}
+                  {{ -1 * color_temp_step }}
+                {% endif %}
