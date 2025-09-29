@@ -54,28 +54,29 @@ variables:
   active_select: !input active_light_select
   current_light_id: "{{ states(active_select) }}"
   active_light: "{{ current_light_id }}"
-  entity_list: "{{ light_list }}"
   entity_names: "{{ light_list | map('replace', 'light.', '') | list }}"
 
 trigger:
   - platform: state
     entity_id: []
-    for:
-      seconds: 0
-    to: ~
-    from: ~
-    variables:
-      triggering_entity: "{{ trigger.entity_id }}"
-    condition:
-      - condition: template
-        value_template: >
-          {{ device_id(triggering_entity) == device_id('!input styrbar_device') }}
-    variables:
+
+condition:
+  - condition: template
+    value_template: >
+      {{
+        trigger.to_state is not none and
+        trigger.from_state is not none and
+        trigger.to_state.state != trigger.from_state.state and
+        device_id(trigger.entity_id) == '!input styrbar_device' and
+        trigger.to_state.state != ''
+      }}
+
+action:
+  - variables:
       action: "{{ trigger.to_state.state }}"
       light_index: "{{ entity_names.index(current_light_id | replace('light.', '')) }}"
       total_lights: "{{ entity_names | length }}"
 
-action:
   - choose:
 
       # 👉 Alternar luz para a direita
