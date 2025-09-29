@@ -1,139 +1,80 @@
 blueprint:
-  name: IKEA Styrbar Zigbee2MQTT - Dispositivo automático
-  description: >
-    Controla luzes com o comando IKEA Styrbar via Zigbee2MQTT.
-    Seleciona o dispositivo (não a entidade), e o blueprint reage automaticamente à entidade *_action.
-    Alterna entre luzes, ajusta brilho e tonalidade, com persistência via input_select.
+  name: Styrbar Light Remote Control with Multiple Devices and Persistence
+  description: Control light(s) on multiple devices with a remote control, switching between them and showing a visual indicator.
   domain: automation
   input:
-    styrbar_device:
-      name: Dispositivo IKEA Styrbar (MQTT)
+    remote:
+      name: Remote Control
+      description: The remote control device (e.g., a button or sensor).
       selector:
-        device:
-          integration: mqtt
-
-    light_entities:
-      name: Luzes a controlar
+        entity:
+          domain: remote
+    lights:
+      name: Lights
+      description: List of lights to toggle
       selector:
         entity:
           domain: light
-          multiple: true
-
-    active_light_select:
-      name: Input Select com a luz ativa
+      multiple: true
+    toggle_action:
+      name: Toggle Action
+      description: Action to perform when button is pressed (e.g., turn on, turn off).
+      default: toggle
       selector:
-        entity:
-          domain: input_select
-
-    brightness_step:
-      name: Passo de brilho (%)
-      default: 10
-      selector:
-        number:
-          min: 1
-          max: 50
-
-    color_temp_step:
-      name: Passo de temperatura (mireds)
-      default: 25
-      selector:
-        number:
-          min: 5
-          max: 100
-
-mode: restart
-
-variables:
-  lights: !input light_entities
-  brightness_step: !input brightness_step
-  color_temp_step: !input color_temp_step
-  select_entity: !input active_light_select
-  light_names: "{{ lights | map('replace', 'light.', '') | list }}"
-  styrbar_device_id: !input styrbar_device
+        action: {}
 
 trigger:
-  - platform: state
-    entity_id:
-      - sensor.styrbar_action  # substitui pelo nome correto se for diferente
-
-condition:
-  - condition: template
-    value_template: >
-      {{ device_id(trigger.entity_id) == styrbar_device_id }}
-
+  platform: state
+  entity_id: !input remote
+  to: 'on'  # Triggering on button press (adjust as necessary for your remote control)
+  
 action:
   - variables:
-      action: "{{ trigger.to_state.state }}"
-      current_option: "{{ states(select_entity) }}"
-      idx: "{{ light_names.index(current_option) }}"
-      total: "{{ light_names | length }}"
-      active_light: "{{ 'light.' ~ current_option }}"
-
+      light_list: !input lights
+      current_light: "{{ states('input_select.current_light') }}"
   - choose:
+      # When the button is pressed, we toggle the current light.
       - conditions:
-          - condition: template
-            value_template: "{{ action == 'arrow_right_click' }}"
+          - condition: state
+            entity_id: "{{ current_light }}"
+            state: 'on'
         sequence:
-          - variables:
-              new_idx: "{{ (idx + 1) % total }}"
-              new_light: "{{ light_names[new_idx] }}"
-          - service: input_select.select_option
-            data:
-              entity_id: "{{ select_entity }}"
-              option: "{{ new_light }}"
+          - service: light.turn_off
+            target:
+              entity_id: "{{ current_light }}"
           - service: light.turn_on
+            target:
+              entity_id: "{{ current_light }}"
             data:
-              entity_id: "{{ 'light.' ~ new_light }}"
-              flash: short
-
+              brightness: 255  # Full brightness when active
+              color_name: 'blue'  # Change color to blue to show it's the active light
       - conditions:
-          - condition: template
-            value_template: "{{ action == 'arrow_left_click' }}"
-        sequence:
-          - variables:
-              new_idx: "{{ (idx - 1) % total }}"
-              new_light: "{{ light_names[new_idx] }}"
-          - service: input_select.select_option
-            data:
-              entity_id: "{{ select_entity }}"
-              option: "{{ new_light }}"
-          - service: light.turn_on
-            data:
-              entity_id: "{{ 'light.' ~ new_light }}"
-              flash: short
-
-      - conditions:
-          - condition: template
-            value_template: "{{ action in ['brightness_up_click', 'brightness_down_click'] }}"
-        sequence:
-          - service: light.toggle
-            data:
-              entity_id: "{{ active_light }}"
-
-      - conditions:
-          - condition: template
-            value_template: "{{ action in ['brightness_up_hold', 'brightness_down_hold'] }}"
+          - condition: state
+            entity_id: "{{ current_light }}"
+            state: 'off'
         sequence:
           - service: light.turn_on
+            target:
+              entity_id: "{{ current_light }}"
             data:
-              entity_id: "{{ active_light }}"
-              brightness_step_pct: >-
-                {% if action == 'brightness_up_hold' %}
-                  {{ brightness_step }}
-                {% else %}
-                  {{ -1 * brightness_step }}
-                {% endif %}
+              brightness: 255  # Full brightness when activated
+              color_name: 'yellow'  # Yellow for "active" indicator
+  - service: input_select.select_next
+    target:
+      entity_id: input_select.current_light
 
-      - conditions:
-          - condition: template
-            value_template: "{{ action in ['arrow_right_hold', 'arrow_left_hold'] }}"
-        sequence:
-          - service: light.turn_on
-            data:
-              entity_id: "{{ active_light }}"
-              color_temp_step: >-
-                {% if action == 'arrow_right_hold' %}
-                  {{ color_temp_step }}
-                {% else %}
-                  {{ -1 * color_temp_step }}
-                {% endif %}
+input_select:
+  current_light:
+    name: Current Light
+    options:
+      - light.luz_sala
+      - light.luz_quarto
+      - light.luz_cozinha
+    initial: light.luz_sala
+    icon: mdi:lightbulb
+
+# Ensuring persistence of the current light
+persistent_notification:
+  title: "Light Control Active"
+  message: "Current active light: {{ states('input_select.current_light') }}"
+
